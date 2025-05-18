@@ -1,0 +1,57 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  name: churn-pipeline  # Changed name to match the DAG
+  namespace: argowf
+spec:
+  entrypoint: churn-pipeline  # Changed entrypoint to use the DAG template
+  volumes:
+    - name: data
+      persistentVolumeClaim:
+        claimName: churn-data-pvc
+    - name: script
+      configMap:
+        name: preprocess-script
+  templates:
+    - name: churn-pipeline
+      dag:
+        tasks:
+          - name: preprocess
+            template: preprocess
+          - name: train
+            dependencies: [preprocess]
+            template: train
+    - name: preprocess
+      container:
+        image: jtayl22/sklearn:0.23-1  # Use your custom image with pandas installed
+        command: ["python3"]
+        args: ["/scripts/preprocessing.py"]
+        volumeMounts:
+          - name: data
+            mountPath: "/opt/ml/processing"
+          - name: script
+            mountPath: "/scripts"
+        resources:
+          limits:
+            cpu: "1"
+            memory: "2Gi"
+          requests:
+            cpu: "0.5"
+            memory: "1Gi"
+    - name: train
+      container:
+        image: jtayl22/xgboost:1.5-1
+        command: ["sh", "-c"]
+        args: ["pip install scikit-learn && mount && find /opt/ml/processing -type f && python3 /scripts/xgboost_script.py --output-dir /opt/ml/processing/hpo"]
+        volumeMounts:
+          - name: data
+            mountPath: "/opt/ml/processing" 
+          - name: script
+            mountPath: "/scripts"
+        resources:
+          limits:
+            cpu: "4"
+            memory: "16Gi"
+          requests:
+            cpu: "2"
+            memory: "8Gi"

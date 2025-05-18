@@ -1,0 +1,80 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: preprocess-script
+  namespace: argowf
+data:
+  preprocessing.py: |
+    import os
+    import pandas as pd
+
+    input_path = "/opt/ml/processing/input/WA_Fn-UseC_-Telco-Customer-Churn.csv"
+    output_train = "/opt/ml/processing/output/train/train.csv"
+    output_test = "/opt/ml/processing/output/test/test.csv"
+
+    # Dummy preprocessing (replace with actual logic)
+    df = pd.read_csv(input_path)
+    train_df = df.sample(frac=0.8, random_state=42)
+    test_df = df.drop(train_df.index)
+
+    os.makedirs(os.path.dirname(output_train), exist_ok=True)
+    os.makedirs(os.path.dirname(output_test), exist_ok=True)
+    train_df.to_csv(output_train, index=False)
+    test_df.to_csv(output_test, index=False)
+  xgboost_script.py: |
+    import argparse
+    import os
+    import pandas as pd
+    import xgboost as xgb
+    from sklearn.metrics import accuracy_score, roc_auc_score
+
+    # Parse arguments
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--output-dir", type=str, default="/opt/ml/processing/hpo")
+    args = parser.parse_args()
+
+    # Create output directory
+    os.makedirs(args.output_dir, exist_ok=True)
+
+    # Load data
+    train_data = pd.read_csv("/opt/ml/processing/output/train/train.csv")
+    test_data = pd.read_csv("/opt/ml/processing/output/test/test.csv")
+
+    # Prepare features and target
+    target = "Churn"
+    if target in train_data.columns:
+        # Convert Yes/No to 1/0
+        train_data[target] = train_data[target].apply(lambda x: 1 if x == "Yes" else 0)
+        test_data[target] = test_data[target].apply(lambda x: 1 if x == "Yes" else 0)
+        
+        features = train_data.drop(columns=[target, "customerID"])
+        
+        # Basic preprocessing - handle categorical data
+        features = pd.get_dummies(features)
+        test_features = pd.get_dummies(test_data.drop(columns=[target, "customerID"]))
+        
+        # Align feature columns
+        features, test_features = features.align(test_features, join="left", axis=1, fill_value=0)
+        
+        # Train model
+        model = xgb.XGBClassifier(n_estimators=100, max_depth=3)
+        model.fit(features, train_data[target])
+        
+        # Evaluate
+        predictions = model.predict(test_features)
+        probs = model.predict_proba(test_features)[:, 1]
+        acc = accuracy_score(test_data[target], predictions)
+        auc = roc_auc_score(test_data[target], probs)
+        
+        # Save results
+        with open(f"{args.output_dir}/metrics.txt", "w") as f:
+            f.write(f"Accuracy: {acc}\n")
+            f.write(f"AUC: {auc}\n")
+        
+        # Save model
+        model.save_model(f"{args.output_dir}/model.xgb")
+        print(f"Model saved to {args.output_dir}/model.xgb")
+        print(f"Accuracy: {acc}")
+        print(f"AUC: {auc}")
+    else:
+        print(f"Target column '{target}' not found in data")

@@ -1,0 +1,6 @@
+FROM python:3.11
+
+# Install dependencies with explicit versions
+RUN pip install scikit-learn xgboost pandas numpy
+
+# No need to COPY scripts as they will be mounted from ConfigMap
