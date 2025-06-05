@@ -1,0 +1,70 @@
+# rbac.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: argo-workflow
+  namespace: argowf
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: argowf
+  name: workflow-role
+rules:
+- apiGroups: [""]
+  resources: ["pods", "pods/exec"]
+  verbs: ["create", "get", "list", "watch", "update", "patch", "delete"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "watch", "list"]
+- apiGroups: [""]
+  resources: ["persistentvolumeclaims"]
+  verbs: ["create", "get", "list", "watch", "update", "patch", "delete"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch"]
+- apiGroups: ["argoproj.io"]
+  resources: ["workflows", "workflows/finalizers"]
+  verbs: ["get", "list", "watch", "update", "patch", "delete", "create"]
+- apiGroups: ["argoproj.io"]
+  resources: ["workflowtasksets", "workflowtasksets/finalizers"]
+  verbs: ["get", "list", "watch", "update", "patch", "delete", "create"]
+- apiGroups: ["argoproj.io"]
+  resources: ["workflowtaskresults", "workflowtaskresults/finalizers"]
+  verbs: ["get", "list", "watch", "update", "patch", "delete", "create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: workflow-binding
+  namespace: argowf
+subjects:
+- kind: ServiceAccount
+  name: argo-workflow
+  namespace: argowf
+roleRef:
+  kind: Role
+  name: workflow-role
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: workflow-cluster-role
+rules:
+- apiGroups: [""]
+  resources: ["persistentvolumes"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: workflow-cluster-binding
+subjects:
+- kind: ServiceAccount
+  name: argo-workflow
+  namespace: argowf
+roleRef:
+  kind: ClusterRole
+  name: workflow-cluster-role
+  apiGroup: rbac.authorization.k8s.io

@@ -1,6 +1,6 @@
-FROM python:3.11
+FROM python:3.8-slim
 
 # Install dependencies with explicit versions
-RUN pip install scikit-learn xgboost pandas numpy
+RUN pip install boto3 mlflow numpy pandas scikit-learn xgboost    
 
 # No need to COPY scripts as they will be mounted from ConfigMap

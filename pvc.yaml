@@ -6,11 +6,12 @@ spec:
   capacity:
     storage: 10Gi
   accessModes:
-    - ReadWriteOnce
+    - ReadWriteMany  # Can use RWX with NFS
   persistentVolumeReclaimPolicy: Retain
-  storageClassName: standard
-  hostPath:
-    path: /mnt/churn-data  # On-prem storage path
+  storageClassName: nfs-shared
+  nfs:
+    server: 192.168.1.100
+    path: /srv/nfs/kubernetes
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -19,8 +20,8 @@ metadata:
   namespace: argowf
 spec:
   accessModes:
-    - ReadWriteOnce
+    - ReadWriteMany  # Allows multiple pods/nodes
   resources:
     requests:
       storage: 10Gi
-  storageClassName: standard
+  volumeName: churn-data-pv
