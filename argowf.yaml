@@ -5,14 +5,14 @@ metadata:
   namespace: argowf
 spec:
   entrypoint: churn-pipeline
-  serviceAccountName: argo-workflow
+  serviceAccountName: argo-workflow # Ensure this service account has rights to read secrets if necessary, usually default does
   volumes:
     - name: data
       persistentVolumeClaim:
         claimName: churn-data-pvc
     - name: script
       configMap:
-        name: preprocess-script
+        name: churn-pipeline-scripts
   templates:
     - name: churn-pipeline
       dag:
@@ -22,14 +22,29 @@ spec:
           - name: train
             dependencies: [preprocess]
             template: train
-          - name: evaluate
-            dependencies: [train]
-            template: evaluate
+          # - name: evaluate
+          #   dependencies: [train]
+          #   template: evaluate
     - name: preprocess
       container:
-        image: jtayl22/sklearn:0.23-3
-        command: ["python3"]
-        args: ["/scripts/preprocessing.py"]
+        image: jtayl22/preprocess:0.23-3 # <<< UPDATED IMAGE NAME
+        command: ["sh", "-c"]
+        args:
+          - |
+            pip install mlflow boto3 pandas scikit-learn # Ensure all deps are here
+            python3 /scripts/preprocessing.py \
+              --input-data-path /opt/ml/processing/input/WA_Fn-UseC_-Telco-Customer-Churn.csv \
+              --output-train-path /opt/ml/processing/output/train/train.csv \
+              --output-test-path /opt/ml/processing/output/test/test.csv \
+              --test-split-ratio 0.2 \
+              --random-state 42 \
+              --mlflow-experiment-name "Churn_Prediction_Experiment"
+        env:
+          - name: MLFLOW_TRACKING_URI
+            value: "http://mlflow.mlflow.svc.cluster.local:5000" # Your MLflow server
+        envFrom:
+          - secretRef:
+              name: minio-credentials-wf
         volumeMounts:
           - name: data
             mountPath: "/opt/ml/processing"
@@ -46,7 +61,21 @@ spec:
       container:
         image: jtayl22/xgboost:1.5-2
         command: ["sh", "-c"]
-        args: ["pip install scikit-learn mlflow boto3 && python3 /scripts/xgboost_script.py --output-dir /opt/ml/processing/hpo"]
+        args:
+          - |
+            pip install scikit-learn mlflow boto3 xgboost pandas # Ensure all deps are here
+            python3 /scripts/xgboost_script.py \
+              --train-data-path /opt/ml/processing/output/train/train.csv \
+              --valid-data-path /opt/ml/processing/output/test/test.csv \
+              --model-output-path /opt/ml/processing/model/xgboost-model \
+              --metrics-output-path /opt/ml/processing/output/metrics.json \
+              --mlflow-experiment-name "Churn_Prediction_XGBoost"
+        env:
+          - name: MLFLOW_TRACKING_URI
+            value: "http://mlflow.mlflow.svc.cluster.local:5000" # Your MLflow server
+        envFrom:
+          - secretRef:
+              name: minio-credentials-wf
         volumeMounts:
           - name: data
             mountPath: "/opt/ml/processing"
@@ -59,11 +88,17 @@ spec:
           requests:
             cpu: "2"
             memory: "8Gi"
-    - name: evaluate
+    - name: evaluate # Keep this commented if evaluation.py is not ready or not in ConfigMap
       container:
         image: jtayl22/xgboost:1.5-2
         command: ["sh", "-c"]
-        args: ["pip install scikit-learn mlflow boto3 && python3 /scripts/evaluation.py"]
+        args: ["echo 'Evaluation script not yet implemented or added to ConfigMap'"]
+        env:
+          - name: MLFLOW_TRACKING_URI
+            value: "http://mlflow.mlflow.svc.cluster.local:5000"
+        envFrom:
+          - secretRef:
+              name: minio-credentials-wf
         volumeMounts:
           - name: data
             mountPath: "/opt/ml/processing"
