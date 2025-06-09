@@ -1,5 +1,91 @@
 apiVersion: v1
 data:
+  evaluation_script.py: "import xgboost as xgb\nimport pandas as pd\nimport os\nimport
+    logging\nfrom sklearn.metrics import accuracy_score, roc_auc_score, precision_score,
+    recall_score, f1_score\nimport json\nimport argparse\nimport mlflow\n\n# Configure
+    logging\nlogging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s
+    - %(message)s')\nlogger = logging.getLogger(__name__)\n\ndef evaluate_model(model_path,
+    valid_data_path, metrics_output_path, mlflow_experiment_name, training_run_id=None):\n
+    \   \"\"\"\n    Loads a trained model, evaluates it on validation data, and logs
+    metrics.\n    \"\"\"\n    logger.info(f\"Starting model evaluation.\")\n    logger.info(f\"MLflow
+    Experiment Name: {mlflow_experiment_name}\")\n    if training_run_id:\n        logger.info(f\"Associated
+    Training MLflow Run ID: {training_run_id}\")\n\n    # --- MLflow Setup ---\n    #
+    MLFLOW_TRACKING_URI and S3 credentials should be set as environment variables
+    in the Argo workflow\n    try:\n        mlflow.set_experiment(mlflow_experiment_name)\n
+    \       logger.info(f\"Using MLflow experiment: {mlflow_experiment_name}\")\n
+    \   except Exception as e:\n        logger.error(f\"Could not set MLflow experiment
+    '{mlflow_experiment_name}': {e}\")\n        # Attempt to create if not exists\n
+    \       try:\n            logger.info(f\"Attempting to create MLflow experiment:
+    {mlflow_experiment_name}\")\n            mlflow.create_experiment(mlflow_experiment_name)\n
+    \           mlflow.set_experiment(mlflow_experiment_name)\n        except Exception
+    as e_create:\n            logger.error(f\"Failed to create or set MLflow experiment:
+    {e_create}\")\n            # Decide if you want to proceed without MLflow or raise
+    error\n\n    # Start a new MLflow run for evaluation, or use the parent training
+    run if ID is provided\n    # For simplicity here, we'll create a new run.\n    #
+    To nest it under the training run, you'd use:\n    # with mlflow.start_run(run_id=training_run_id,
+    nested=True, run_name=\"evaluation\") if training_run_id else mlflow.start_run(run_name=\"evaluation_run\")
+    as run:\n    \n    # For now, let's create a distinct evaluation run, but tag
+    it if training_run_id is available\n    with mlflow.start_run(run_name=\"model_evaluation_run\")
+    as run:\n        eval_run_id = run.info.run_id\n        logger.info(f\"Evaluation
+    MLflow Run ID: {eval_run_id}\")\n        if training_run_id:\n            mlflow.set_tag(\"training_run_id\",
+    training_run_id)\n        mlflow.log_param(\"model_path\", model_path)\n        mlflow.log_param(\"validation_data_path\",
+    valid_data_path)\n\n        # Load the trained model\n        logger.info(f\"Loading
+    model from {model_path}\")\n        try:\n            model = xgb.XGBClassifier()\n
+    \           model.load_model(model_path)\n            logger.info(\"Model loaded
+    successfully.\")\n        except Exception as e:\n            logger.error(f\"Failed
+    to load model from {model_path}: {e}\")\n            mlflow.set_tag(\"evaluation_status\",
+    \"failed_model_load\")\n            raise\n\n        # Load validation data\n
+    \       logger.info(f\"Loading validation data from {valid_data_path}\")\n        try:\n
+    \           valid_data = pd.read_csv(valid_data_path)\n            X_valid = valid_data.iloc[:,
+    1:]  # Assuming first column is target\n            y_valid = valid_data.iloc[:,
+    0]\n            logger.info(f\"Validation data loaded. Shape: X_valid {X_valid.shape},
+    y_valid {y_valid.shape}\")\n        except Exception as e:\n            logger.error(f\"Failed
+    to load validation data from {valid_data_path}: {e}\")\n            mlflow.set_tag(\"evaluation_status\",
+    \"failed_data_load\")\n            raise\n\n        # Make predictions\n        logger.info(\"Making
+    predictions on validation data.\")\n        try:\n            y_pred_proba = model.predict_proba(X_valid)[:,
+    1]\n            y_pred = model.predict(X_valid)\n        except Exception as e:\n
+    \           logger.error(f\"Error during prediction: {e}\")\n            mlflow.set_tag(\"evaluation_status\",
+    \"failed_prediction\")\n            raise\n\n        # Calculate metrics\n        logger.info(\"Calculating
+    evaluation metrics.\")\n        try:\n            accuracy = accuracy_score(y_valid,
+    y_pred)\n            auc = roc_auc_score(y_valid, y_pred_proba)\n            precision
+    = precision_score(y_valid, y_pred, zero_division=0)\n            recall = recall_score(y_valid,
+    y_pred, zero_division=0)\n            f1 = f1_score(y_valid, y_pred, zero_division=0)\n\n
+    \           metrics = {\n                \"accuracy\": accuracy,\n                \"auc\":
+    auc,\n                \"precision\": precision,\n                \"recall\": recall,\n
+    \               \"f1_score\": f1\n            }\n            logger.info(f\"Evaluation
+    Metrics: {metrics}\")\n\n            # Log metrics to MLflow\n            logger.info(\"Logging
+    metrics to MLflow.\")\n            mlflow.log_metrics(metrics)\n\n            #
+    Print metrics for Argo logs / SageMaker HPO compatibility\n            print(f\"validation:accuracy:
+    {accuracy}\")\n            print(f\"validation:auc: {auc}\")\n            print(f\"validation:precision:
+    {precision}\")\n            print(f\"validation:recall: {recall}\")\n            print(f\"validation:f1_score:
+    {f1}\")\n\n            # Save metrics to JSON file\n            logger.info(f\"Saving
+    evaluation metrics to {metrics_output_path}\")\n            os.makedirs(os.path.dirname(metrics_output_path),
+    exist_ok=True)\n            with open(metrics_output_path, 'w') as f:\n                json.dump(metrics,
+    f, indent=4)\n            logger.info(\"Metrics saved successfully.\")\n            mlflow.log_artifact(metrics_output_path,
+    artifact_path=\"evaluation_results\")\n            mlflow.set_tag(\"evaluation_status\",
+    \"completed\")\n\n        except Exception as e:\n            logger.error(f\"Error
+    during metrics calculation or logging: {e}\")\n            mlflow.set_tag(\"evaluation_status\",
+    \"failed_metrics_calculation\")\n            raise\n\n    logger.info(\"Model
+    evaluation script finished.\")\n    return metrics\n\n\nif __name__ == '__main__':\n
+    \   parser = argparse.ArgumentParser(description=\"Evaluate a trained XGBoost
+    model.\")\n    parser.add_argument('--model-path', type=str, required=True,\n
+    \                       help='Path to the trained XGBoost model file (e.g., /opt/ml/processing/model/xgboost-model).')\n
+    \   parser.add_argument('--valid-data-path', type=str, required=True,\n                        help='Path
+    to the validation data CSV file (e.g., /opt/ml/processing/output/test/test.csv).')\n
+    \   parser.add_argument('--metrics-output-path', type=str, required=True,\n                        help='Path
+    to save the evaluation metrics JSON file (e.g., /opt/ml/processing/output/evaluation_metrics.json).')\n
+    \   parser.add_argument('--mlflow-experiment-name', type=str, default=\"Churn_Prediction_XGBoost\",
+    # Or a new one like \"Churn_Model_Evaluation\"\n                        help='Name
+    of the MLflow experiment to log metrics to.')\n    parser.add_argument('--training-run-id',
+    type=str, default=None, required=False,\n                        help='(Optional)
+    MLflow Run ID of the training job to associate this evaluation with.')\n    \n
+    \   args = parser.parse_args()\n\n    # Ensure MLFLOW_TRACKING_URI is set in the
+    environment by Argo workflow\n    if not os.environ.get(\"MLFLOW_TRACKING_URI\"):\n
+    \       logger.warning(\"MLFLOW_TRACKING_URI environment variable not set. MLflow
+    logging might fail or use local tracking.\")\n\n    evaluate_model(\n        model_path=args.model_path,\n
+    \       valid_data_path=args.valid_data_path,\n        metrics_output_path=args.metrics_output_path,\n
+    \       mlflow_experiment_name=args.mlflow_experiment_name,\n        training_run_id=args.training_run_id\n
+    \   )"
   preprocessing.py: "import pandas as pd\nfrom sklearn.preprocessing import LabelEncoder
     # Keep if used, though current script doesn't use it for final encoding\nfrom
     sklearn.model_selection import train_test_split\nimport argparse\nimport os\nimport

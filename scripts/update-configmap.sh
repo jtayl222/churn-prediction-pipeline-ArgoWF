@@ -18,11 +18,10 @@ mkdir -p "$(dirname "$OUTPUT_YAML")"
 # Create/update the ConfigMap
 # Add --from-file for each script you want to include.
 # The key in the ConfigMap will be the filename (e.g., preprocessing.py).
-# Add other scripts here as needed, e.g.:
-# --from-file=evaluation_script.py=scripts/evaluation_script.py \
 kubectl create configmap "${CONFIGMAP_NAME}" \
   --from-file=preprocessing.py=scripts/preprocessing.py \
   --from-file=xgboost_script.py=scripts/xgboost_script.py \
+  --from-file=evaluation_script.py=scripts/evaluation_script.py \
   --namespace="${NAMESPACE}" \
   --dry-run=client -o yaml | \
   grep -v "creationTimestamp" > "${OUTPUT_YAML}"

@@ -22,9 +22,9 @@ spec:
           - name: train
             dependencies: [preprocess]
             template: train
-          # - name: evaluate
-          #   dependencies: [train]
-          #   template: evaluate
+          - name: evaluate
+            dependencies: [train]
+            template: evaluate
     - name: preprocess
       container:
         image: jtayl22/preprocess:0.23-3 # <<< UPDATED IMAGE NAME
@@ -92,7 +92,14 @@ spec:
       container:
         image: jtayl22/xgboost:1.5-2
         command: ["sh", "-c"]
-        args: ["echo 'Evaluation script not yet implemented or added to ConfigMap'"]
+        args:
+          - |
+            pip install scikit-learn mlflow boto3 xgboost pandas
+            python3 /scripts/evaluation_script.py \
+              --valid-data-path /opt/ml/processing/output/test/test.csv \
+              --model-path /opt/ml/processing/model/xgboost-model \
+              --metrics-output-path /opt/ml/processing/output/eval_metrics.json \
+              --mlflow-experiment-name "Churn_Prediction_XGBoost"
         env:
           - name: MLFLOW_TRACKING_URI
             value: "http://mlflow.mlflow.svc.cluster.local:5000"

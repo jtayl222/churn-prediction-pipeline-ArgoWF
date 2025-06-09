@@ -47,11 +47,11 @@ If you've made changes to the Python environments or need to include specific de
 
 ```bash
 # Ensure Dockerfiles are in the project root
-docker build -t jtayl22/preprocess:0.23-3 -f Dockerfile.preprocess . # Updated name and Dockerfile
+docker build -t jtayl22/preprocess:0.23-3 -f Dockerfile.preprocess .
 docker build -t jtayl22/xgboost:1.5-2 -f Dockerfile.xgboost .
 
 # Push images to your container registry
-docker push jtayl22/preprocess:0.23-3 # Updated image name
+docker push jtayl22/preprocess:0.23-3
 docker push jtayl22/xgboost:1.5-2
 ```
 *Note: The provided `argowf.yaml` now includes `pip install` commands for dependencies as a fallback if they are not in the base images.*
