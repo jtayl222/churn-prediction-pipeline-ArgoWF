@@ -1,0 +1,46 @@
+apiVersion: machinelearning.seldon.io/v1
+kind: SeldonDeployment
+metadata:
+  name: churn-xgboost-model
+  namespace: argowf
+spec:
+  protocol: seldon
+  predictors:
+  - graph:
+      implementation: MLFLOW_SERVER
+      modelUri: MODEL_ARTIFACT_URI_PLACEHOLDER
+      name: churn-classifier
+      envSecretRefName: minio-credentials-wf
+    name: default
+    replicas: 1
+    componentSpecs:
+    - spec:
+        containers:
+        - name: churn-classifier
+          volumeMounts:
+          - name: churn-classifier-provision-location
+            mountPath: /mnt/models
+            readOnly: true
+          resources:
+            requests:
+              cpu: "2"
+              memory: 6Gi
+            limits:
+              cpu: "4" # Keep CPU limit, or adjust if CPU is also an issue
+              memory: 8Gi
+          livenessProbe:
+            failureThreshold: 3
+            initialDelaySeconds: 600 # Drastically increased for testing
+            periodSeconds: 10 # Maybe increase period slightly too
+            successThreshold: 1
+            tcpSocket:
+              port: 9000
+            timeoutSeconds: 5 # Maybe increase timeout slightly
+          readinessProbe:
+            failureThreshold: 3
+            initialDelaySeconds: 120 # Increased
+            periodSeconds: 5
+            successThreshold: 1
+            tcpSocket:
+              port: 9000
+            timeoutSeconds: 1

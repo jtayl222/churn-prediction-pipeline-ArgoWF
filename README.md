@@ -205,3 +205,103 @@ MLflow is a core component of this MLOps pipeline, used for managing the machine
 *The `MLFLOW_TRACKING_URI` environment variable in `argowf.yaml` must point to your MLflow server (e.g., `http://mlflow.mlflow.svc.cluster.local:5000`).*
 *Experiments (`Churn_Prediction_Experiment`, `Churn_Prediction_XGBoost`) will be created in MLflow if they don't already exist.*
 *Parameters, metrics, and the trained XGBoost model will be logged to MLflow for each run.*
+
+## Model Deployment with Seldon Core
+
+After successful training and evaluation, the pipeline can automatically deploy the trained XGBoost model as a REST API endpoint using Seldon Core.
+
+### Prerequisites for Seldon Deployment
+
+*   Seldon Core installed in your Kubernetes cluster.
+*   The `argo-workflow` service account must have permissions to manage `SeldonDeployment` resources in the `argowf` namespace. Apply `k8s/seldon-rbac.yaml`:
+    ```bash
+    kubectl apply -f k8s/seldon-rbac.yaml
+    ```
+*   A ConfigMap containing the SeldonDeployment template must exist:
+    ```bash
+    kubectl create configmap seldon-churn-template --from-file=k8s/seldon-churn-deployment-template.yaml -n argowf
+    ```
+    (This step might be automated or handled differently in a production setup, e.g., by including the template directly in the Argo workflow or using a Helm chart).
+
+### Deployment Process
+
+1.  The `train` step in the Argo workflow trains the model and logs it to MLflow, outputting the MLflow model URI.
+2.  The `deploy-seldon-model` step takes this URI.
+3.  It uses a template (`k8s/seldon-churn-deployment-template.yaml`, made available via the `seldon-churn-template` ConfigMap) and injects the model URI into it.
+4.  It then applies this manifest using `kubectl apply`, creating a `SeldonDeployment` named `churn-xgboost-model`.
+5.  Seldon Core provisions the necessary pods and services to serve the model. The model artifacts are pulled from the S3/MinIO location specified by the model URI, using credentials from the `minio-credentials-wf` secret.
+
+### Accessing the Deployed Model
+
+Once the `SeldonDeployment` is ready, you can find its service. Seldon typically creates a service for each predictor.
+```bash
+kubectl get svc -n argowf | grep churn-xgboost-model
+# Look for a service like churn-xgboost-model-default-churn-classifier or similar
+
+# If you have an Ingress controller (like Nginx, Traefik) or a service mesh (like Istio with a gateway)
+# configured to expose Seldon services, you'll use its external IP/port.
+# Otherwise, for testing within the cluster or via port-forward:
+kubectl port-forward svc/churn-xgboost-model-default-churn-classifier 9000:9000 -n argowf # Port 9000 is common for the component's HTTP endpoint
+```
+
+Then you can send prediction requests. For a Seldon model, the payload format is specific.
+Example using `curl` (assuming port-forward is active on port 9000 to the component service):
+```bash
+curl -X POST -H "Content-Type: application/json" -d '{
+    "data": {
+        "ndarray": [[/* feature_vector_1 */], [/* feature_vector_2 */]]
+    }
+}' http://localhost:9000/api/v1.0/predictions
+```
+Replace `[[/* feature_vector_1 */]]` with actual numeric data matching your model's input features.
+
+You can also use the `seldon-core-api-tester` tool if you have it.
+
+### Seldon Core CLI Commands (kubectl)
+
+Here are some useful `kubectl` commands for interacting with Seldon Core resources:
+
+*   **List SeldonDeployments:**
+    ```bash
+    kubectl get seldondeployments -n argowf
+    ```
+
+*   **Describe a SeldonDeployment (shows status, events, and configuration):**
+    ```bash
+    kubectl describe seldondeployment <seldon-deployment-name> -n argowf
+    # e.g., kubectl describe seldondeployment churn-xgboost-model -n argowf
+    ```
+
+*   **Get the YAML definition of a SeldonDeployment:**
+    ```bash
+    kubectl get seldondeployment <seldon-deployment-name> -n argowf -o yaml
+    ```
+
+*   **Delete a SeldonDeployment (this will remove the model server and associated resources):**
+    ```bash
+    kubectl delete seldondeployment <seldon-deployment-name> -n argowf
+    ```
+
+*   **Check logs of the Seldon model server pods:**
+    First, find the pod name:
+    ```bash
+    kubectl get pods -n argowf -l seldon-deployment-id=<seldon-deployment-name>
+    # e.g., kubectl get pods -n argowf -l seldon-deployment-id=churn-xgboost-model
+    ```
+    Then, view logs (replace `<pod-name>` and `<container-name>`):
+    ```bash
+    # Logs for the model initializer (rclone)
+    kubectl logs <pod-name> -n argowf -c <graph-component-name>-model-initializer
+    # e.g., kubectl logs churn-xgboost-model-default-0-churn-classifier-xxxx -n argowf -c churn-classifier-model-initializer
+
+    # Logs for the main model server container
+    kubectl logs <pod-name> -n argowf -c <graph-component-name>
+    # e.g., kubectl logs churn-xgboost-model-default-0-churn-classifier-xxxx -n argowf -c churn-classifier
+    ```
+    *(The exact container names can be found by describing the pod: `kubectl describe pod <pod-name> -n argowf`)*
+
+*   **Check Seldon Controller Manager logs (for debugging Seldon Core itself):**
+    (Assuming Seldon is installed in `seldon-system` namespace)
+    ```bash
+    kubectl logs -n seldon-system -l control-plane=seldon-controller-manager -f
+    ```

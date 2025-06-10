@@ -13,6 +13,9 @@ spec:
     - name: script
       configMap:
         name: churn-pipeline-scripts
+    - name: seldon-template-volume # Define the volume here
+      configMap:
+        name: seldon-churn-template
   templates:
     - name: churn-pipeline
       dag:
@@ -25,6 +28,14 @@ spec:
           - name: evaluate
             dependencies: [train]
             template: evaluate
+          - name: deploy-seldon-model
+            dependencies: [evaluate] # Deploy only after successful evaluation
+            template: deploy-seldon-model
+            arguments:
+              parameters:
+                - name: model_uri
+                  value: "{{tasks.train.outputs.parameters.mlflow_model_uri}}"
+
     - name: preprocess
       container:
         image: jtayl22/preprocess:0.23-3 # <<< UPDATED IMAGE NAME
@@ -88,6 +99,11 @@ spec:
           requests:
             cpu: "2"
             memory: "8Gi"
+      outputs:
+        parameters:
+          - name: mlflow_model_uri
+            valueFrom:
+              path: /tmp/mlflow_model_uri.txt # Path where xgboost_script.py writes the URI
     - name: evaluate # Keep this commented if evaluation.py is not ready or not in ConfigMap
       container:
         image: jtayl22/xgboost:1.5-2
@@ -118,3 +134,60 @@ spec:
           requests:
             cpu: "1"
             memory: "2Gi"
+    - name: deploy-seldon-model
+      inputs:
+        parameters:
+          - name: model_uri
+      container:
+        image: bitnami/kubectl:latest # Image with kubectl and common utilities like sed
+        command: ["sh", "-c"]
+        args:
+          - |
+            set -e
+            echo "Starting Seldon model deployment..."
+            MODEL_URI="{{inputs.parameters.model_uri}}"
+            echo "Using Model URI: $MODEL_URI"
+
+            if [ -z "$MODEL_URI" ]; then
+              echo "Error: Model URI is empty. Aborting deployment."
+              exit 1
+            fi
+            
+            # Prepare the SeldonDeployment manifest
+            # Copy template from ConfigMap (if mounted) or use a here-doc/pre-existing file in image
+            # For simplicity, assuming k8s/ is accessible or we use a ConfigMap for the template too.
+            # Let's assume we will cat the template and use sed.
+            # Better: Mount the k8s dir or the specific template file into this pod.
+            # For now, let's assume the template is available at /seldon-template/seldon-churn-deployment-template.yaml
+            # This requires adding a volumeMount for the k8s ConfigMap or a gitRepo volume.
+
+            # Simpler approach for now: define template inline or ensure it's in the image.
+            # For this example, we'll assume the template is copied into the k8s/ directory in the repo
+            # and this step has access to it (e.g. via a git sync sidecar or by building it into the image).
+            # A more robust way is to store the template in a ConfigMap and mount it.
+
+            # Let's use a temporary file for the processed manifest
+            cp /seldon_manifest_template/seldon-churn-deployment-template.yaml /tmp/seldon-deployment.yaml
+            
+            # Replace placeholder with actual model URI
+            # Ensure MODEL_URI is properly escaped if it contains special characters for sed
+            # Using a different delimiter for sed in case URI contains slashes
+            sed -i "s|MODEL_ARTIFACT_URI_PLACEHOLDER|$MODEL_URI|g" /tmp/seldon-deployment.yaml
+            
+            echo "--- Generated SeldonDeployment Manifest ---"
+            cat /tmp/seldon-deployment.yaml
+            echo "-----------------------------------------"
+            
+            echo "Applying SeldonDeployment manifest..."
+            kubectl apply -f /tmp/seldon-deployment.yaml -n argowf
+            
+            echo "SeldonDeployment applied. Waiting for it to become available..."
+            sleep 30 # Simple wait, consider a more robust check
+            kubectl get seldondeployment churn-xgboost-model -n argowf -o yaml
+            echo "To get the prediction endpoint, run: kubectl get svc churn-xgboost-model-default-churn-classifier -n argowf" # Corrected service name
+            echo "Or use: seldon-core-api-tester contract --namespace argowf churn-xgboost-model 0.0.0.0:9000 --endpoint default --broker ambassador" # Port 9000 for component
+            echo "If using Istio/Ambassador, the external IP/port will be different."
+
+        volumeMounts:
+          - name: seldon-template-volume # Mount the ConfigMap containing the Seldon template
+            mountPath: /seldon_manifest_template
